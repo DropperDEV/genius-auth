@@ -7,10 +7,11 @@ const cookieParser = require("cookie-parser");
 const app = express();
 app.use(express.json());
 
-//Configurando CORS para aceitar o frontend no GitHub Pages
 const allowedOrigins = [
     "https://dropperdev.github.io",
     "https://dropperdev.github.io/reactSongs",
+    "http://localhost:5173",
+    "http://localhost:5173/reactSongs",
 ];
 app.use(
     cors({
@@ -21,7 +22,7 @@ app.use(
                 callback(new Error("Not allowed by CORS"));
             }
         },
-        credentials: true, 
+        credentials: true,
     })
 ); app.use(cookieParser());
 
@@ -29,64 +30,93 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 
-app.post("/get-token", async (req, res) => {
-    const { code } = req.body;
+app.get('/login', async (req, res) => {
+    const authUrl = `https://api.genius.com/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=me&state=xyz&response_type=code`;
+    res.redirect(authUrl);
+});
+
+app.get('/callback', async (req, res) => {
+    const { code } = req.query;
+    if (!code) {
+        return res.status(400).send('Código de autorização não fornecido');
+    }
 
     try {
-        const response = await axios.post("https://api.genius.com/oauth/token", {
+        const response = await axios.post('https://api.genius.com/oauth/token', {
             code,
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
             redirect_uri: REDIRECT_URI,
-            response_type: "code",
-            grant_type: "authorization_code",
+            response_type: 'code',
+            grant_type: 'authorization_code'
         });
 
-        const { access_token } = response.data;
+        const accessToken = response.data.access_token;
 
-        // Armazena o token em um cookie 
-        res.cookie("access_token", access_token, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "None",
-            maxAge: 3600000,
-        });
-
-        res.json({ message: "Token armazenado com sucesso" });
+        res.cookie('accessToken', accessToken, { httpOnly: true, secure: true, maxAge: 3600 * 1000 });
+        res.redirect("http://localhost:5173/reactSongs")
     } catch (error) {
-        console.error("Erro ao obter o token:", error);
-        res.status(500).json({ error: "Erro ao obter o token" });
+        console.error("Erro ao obter token de acesso:", error);
+        res.status(500).send('Erro ao obter token de acesso');
     }
 });
 
-app.get("/logout", (req, res) => {
-    res.clearCookie("access_token", { sameSite: "None", secure: true });
-    res.json({ message: "Logout realizado com sucesso" });
-});
 
-app.get("/search", async (req, res) => {
-    const accessToken = req.cookies.access_token; 
+app.get('/search', async (req, res) => {
+    const { q } = req.query;
+    const accessToken = req.cookies.accessToken;
+
+    if (!q) {
+        return res.status(400).send('Parâmetro de pesquisa não fornecido');
+    }
 
     if (!accessToken) {
-        return res.status(401).json({ error: "Token não encontrado" });
-    }
-
-    const query = req.query.q;
-    if (!query) {
-        return res.status(400).json({ error: "Nenhuma busca informada" });
+        return res.status(401).send('Token de acesso não disponível. Faça login primeiro.');
     }
 
     try {
-        const response = await axios.get(`https://api.genius.com/search?q=${encodeURIComponent(query)}`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
+        const response = await axios.get(`https://api.genius.com/search?q=${encodeURIComponent(q)}`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
         });
-
         res.json(response.data);
     } catch (error) {
-        console.error("Erro na busca:", error);
-        res.status(500).json({ error: "Erro ao buscar no Genius" });
+        res.status(500).send('Erro ao buscar músicas');
     }
 });
+
+
+app.get('/logout', (req, res) => {
+    res.clearCookie('accessToken');
+    res.send('Logout bem-sucedido!');
+});
+
+app.get('/check-auth', (req, res) => {
+    const accessToken = req.cookies.accessToken;
+    if (accessToken) {
+        res.json({ isAuthenticated: true });
+    } else {
+        res.json({ isAuthenticated: false });
+    }
+});
+
+
+app.get("/account-info", async (req, res) => {
+    const accessToken = req.cookies.accessToken;
+
+    if (!accessToken) {
+        return res.status(401).send('Token de acesso não disponível. Faça login primeiro.');
+    }
+
+    try {
+        const response = await axios.get(`https://api.genius.com/account`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).send('Erro ao buscar dados da conta');
+    }
+})
+
 
 
 const PORT = process.env.PORT || 5000;
